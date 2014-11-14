@@ -2,6 +2,7 @@
 import os
 import tempfile
 import wx
+import uuid
 
 from grass.script import core as gcore
 from grass.script import raster as grast
@@ -203,82 +204,33 @@ class RDigitController:
         if not self._editedRaster:
             return
 
-        asciiFile = tempfile.NamedTemporaryFile(delete=False)
+        tempRaster = 'tmp_rdigit_rast_' + str(os.getpid())
+        text = []
+        rastersToPatch = []
         for item in self._all:
-            if item in self._areas.GetAllItems():
-                self._writeArea(item, asciiFile)
-            if item in self._lines.GetAllItems():
-                self._writeLine(item, asciiFile)
-            if item in self._points.GetAllItems():
-                self._writePoint(item, asciiFile)
+            if item.GetPropertyVal('widthValue'):
+                if text:
+                    out = self._rasterize(text, item.GetPropertyVal('widthValue'), tempRaster)
+                    rastersToPatch.append(out)
+                    text = []
+                self._writeItem(item, text)
+                out = self._rasterize(text, item.GetPropertyVal('widthValue'),
+                                      tempRaster)
+                rastersToPatch.append(out)
+                text = []
+            else:
+                self._writeItem(item, text)
+        if text:
+            out = self._rasterize(text, item.GetPropertyVal('widthValue'),
+                                  tempRaster)
+            rastersToPatch.append(out)
 
-        asciiFile.close()
+        gcore.run_command('g.copy', rast=[self._editedRaster, tempRaster], overwrite=True, quiet=True)
+        gcore.run_command('r.patch', input=sorted(rastersToPatch, reverse=True) + [tempRaster],
+                          output=self._editedRaster, overwrite=True, quiet=True)
+        gcore.run_command('g.remove', type='rast', flags='f', name=rastersToPatch + [tempRaster])
 
-
-        tempVector = 'tmp_rdigit_vector_' + str(os.getpid())
-        tempVector2 = 'tmp_rdigit_vector2_' + str(os.getpid())
-        tempRaster = 'tmp_rdigit_raster_' + str(os.getpid())
-        tempRaster2 = 'tmp_rdigit_raster2_' + str(os.getpid())
-
-        try:
-            gcore.run_command('v.in.ascii', input=asciiFile.name, output=tempVector,
-                              format='standard', flags='n', quiet=True)
-        except CalledModuleError:
-            GError(parent=self._mapWindow, message=_("Failed to create a temporary vector map"))
-            os.unlink(asciiFile.name)
-            return
-        gcore.run_command('v.db.addtable', map=tempVector, quiet=True,
-                          columns='value double precision, width double precision')
-        sql = ''
-        for key in self._catToCellValue:
-            sql += ("UPDATE {tb} SET value={val},width={w}"
-                    " WHERE cat={cat};\n".format(tb=tempVector, cat=key,
-                                                 val=self._catToCellValue[key],
-                                                 w=self._catToWidthValue[key]))
-        gcore.write_command('db.execute', stdin=sql, input='-', quiet=True)
-        gcore.run_command('v.buffer', flags='t', input=tempVector, layer=1,
-                          output=tempVector2, bufcolumn='width', quiet=True)
-        gcore.run_command('v.to.rast', input=tempVector2, output=tempRaster,
-                          use='attr', attrcolumn='value', quiet=True)
-
-        gcore.run_command('g.copy', rast=[self._editedRaster, tempRaster2])
-        exp = '{edited} = if(! isnull({drawn}), {drawn}, {copied})'.format(
-            edited=self._editedRaster.split('@')[0],
-            drawn=tempRaster, copied=tempRaster2)
-
-        grast.mapcalc(exp=exp, quiet=True, overwrite=True)
-
-        os.unlink(asciiFile.name)
-
-    def _writeArea(self, item, asciiFile):
-        coords = item.GetCoords()
-        cat = item.GetPropertyVal('cat')
-        cellValue = item.GetPropertyVal('cellValue')
-        widthValue = item.GetPropertyVal('widthValue')
-        self._catToCellValue[cat] = cellValue
-        # v.buffer won't copy features with 0 buffer distance
-        # so we set small value (won't work for latlon?)
-        if widthValue == 0:
-            widthValue = 1e-6
-        self._catToWidthValue[cat] = widthValue
-        record = 'B {length}\n'.format(length=len(coords) + 1)
-        for coord in coords + [coords[0]]:
-            record += ' '.join([str(c) for c in coord])
-            record += '\n'
-        record += 'C 1 1\n'
-        x, y = self._getCentroid(coords)
-        record += '{x} {y}\n'.format(x=x, y=y)
-        record += '1 {cat}\n'.format(cat=cat)
-
-        asciiFile.write(record)
-
-    def _writeLine(self, item, asciiFile):
-        self._writeLinePoint(item, vtype='L', asciiFile=asciiFile)
-
-    def _writePoint(self, item, asciiFile):
-        self._writeLinePoint(item, vtype='P', asciiFile=asciiFile)
-
-    def _writeLinePoint(self, item, vtype, asciiFile):
+    def _writeFeature(self, item, vtype, text):
         coords = item.GetCoords()
         if vtype == 'P':
             coords = [coords]
@@ -286,24 +238,34 @@ class RDigitController:
         cellValue = item.GetPropertyVal('cellValue')
         widthValue = item.GetPropertyVal('widthValue')
         self._catToCellValue[cat] = cellValue
-        # v.buffer won't copy features with 0 buffer distance
-        # so we set small value (won't work for latlon?)
-        if widthValue == 0:
-            widthValue = 1e-6
         self._catToWidthValue[cat] = widthValue
-        record = '{vtype} {length} 1\n'.format(vtype=vtype, length=len(coords))
+        record = '{vtype}\n'.format(vtype=vtype)
         for coord in coords:
             record += ' '.join([str(c) for c in coord])
             record += '\n'
-        record += '1 {cat}\n'.format(cat=cat)
+        record += '= {cat}\n'.format(cat=cat)
+        text.append(record)
 
-        asciiFile.write(record)
+    def _writeItem(self, item, text):
+        if item in self._areas.GetAllItems():
+            self._writeFeature(item, vtype='A', text=text)
+        elif item in self._lines.GetAllItems():
+            self._writeFeature(item, vtype='L', text=text)
+        elif item in self._points.GetAllItems():
+            self._writeFeature(item, vtype='P', text=text)
 
-    def _getCentroid(self, coords):
-        x = y = 0
-        for xc, yc in coords:
-            x += xc
-            y += yc
-        x /= len(coords)
-        y /= len(coords)
-        return x, y
+    def _rasterize(self, text, bufferDist, tempRaster):
+        output = 'x' + str(uuid.uuid4())[:8]
+        asciiFile = tempfile.NamedTemporaryFile(delete=False)
+        asciiFile.write('\n'.join(text))
+        asciiFile.close()
+        if bufferDist:
+            gcore.run_command('r.in.poly', input=asciiFile.name, output=tempRaster,
+                              overwrite=True, quiet=True)
+            gcore.run_command('r.grow', input=tempRaster, output=output,
+                              flags='m', radius=bufferDist, quiet=True)
+        else:
+            gcore.run_command('r.in.poly', input=asciiFile.name, output=output,
+                              quiet=True)
+        os.unlink(asciiFile.name)
+        return output
