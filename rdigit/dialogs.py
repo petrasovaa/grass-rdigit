@@ -21,16 +21,20 @@ from gui_core.gselect import Select
 from core.gcmd import GWarning
 
 import grass.script.core as gcore
+import grass.script.raster as grast
+from grass.exceptions import CalledModuleError
 
 
 class NewRasterDialog(wx.Dialog):
     def __init__(self, parent):
         wx.Dialog.__init__(self, parent)
+        self.SetTitle(_("Create new raster map"))
         self._name = None
         self._type = None
 
         # create widgets
         self._mapSelect = Select(parent=self, type='rast')
+        self._backgroundSelect = Select(parent=self, type='rast')
         self._typeChoice = wx.Choice(self, choices=['CELL', 'FCELL', 'DCELL'])
         self._typeChoice.SetSelection(0)
         self._mapSelect.SetFocus()
@@ -46,9 +50,12 @@ class NewRasterDialog(wx.Dialog):
         sizer.Add(wx.StaticText(self, label=_("Name for new raster map:")),
                   pos=(0, 0), span=(1, 2), flag=wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(self._mapSelect, pos=(1, 0), span=(1, 2))
+        sizer.Add(wx.StaticText(self, label=_("Optionally select background raster map:")),
+                  pos=(2, 0), span=(1, 2), flag=wx.ALIGN_CENTER_VERTICAL)
+        sizer.Add(self._backgroundSelect, pos=(3, 0), span=(1, 2))
         sizer.Add(wx.StaticText(self, label=_("New raster map type:")),
-                  pos=(2, 0), flag=wx.EXPAND | wx.ALIGN_CENTER_VERTICAL)
-        sizer.Add(self._typeChoice, pos=(2, 1), flag=wx.EXPAND)
+                  pos=(4, 0), flag=wx.EXPAND | wx.ALIGN_CENTER_VERTICAL)
+        sizer.Add(self._typeChoice, pos=(4, 1), flag=wx.EXPAND)
 
         mainSizer.Add(sizer, proportion=1, flag=wx.EXPAND | wx.ALL, border=10)
 
@@ -59,8 +66,18 @@ class NewRasterDialog(wx.Dialog):
 
         mainSizer.Add(btnSizer, flag=wx.EXPAND | wx.ALL, border=10)
 
+        self._backgroundSelect.Bind(wx.EVT_TEXT, self.OnBackgroundMap)
+
         self.SetSizer(mainSizer)
         mainSizer.Fit(self)
+
+    def OnBackgroundMap(self, event):
+        value = self._backgroundSelect.GetValue()
+        try:
+            ret = grast.raster_info(value)
+            self._typeChoice.SetStringSelection(ret['datatype'])
+        except CalledModuleError:
+            return
 
     def OnOK(self, event):
         mapName = self.GetMapName()
@@ -85,6 +102,9 @@ class NewRasterDialog(wx.Dialog):
 
     def GetMapName(self):
         return self._mapSelect.GetValue()
+
+    def GetBackgroundMapName(self):
+        return self._backgroundSelect.GetValue()
 
     def GetMapType(self):
         return self._typeChoice.GetStringSelection()

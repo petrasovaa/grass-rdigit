@@ -44,22 +44,23 @@ class RDigitToolbar(BaseToolbar):
         self._mapSelectionComboId = wx.NewId()
         self._mapSelectionCombo = wx.ComboBox(self, id=self._mapSelectionComboId,
                                               value=_("Select raster map"),
-                                              choices=[], size=(120, -1),
-                                              style=wx.CB_READONLY)
+                                              choices=[], size=(120, -1))
         self._mapSelectionCombo.Bind(wx.EVT_COMBOBOX, self.OnMapSelection)
+        self._mapSelectionCombo.SetEditable(False)
         self.InsertControl(0, self._mapSelectionCombo)
+        self._previousMap = self._mapSelectionCombo.GetValue()
 
-        self._cellValues = ['1']
+        self._cellValues = set(['1'])
         self._valueComboId = wx.NewId()
         # validator does not work with combobox, SetBackgroundColor is not working
         self._valueCombo = wx.ComboBox(self, id=self._valueComboId,
-                                       choices=self._cellValues, size=(80, -1),
+                                       choices=list(self._cellValues), size=(80, -1),
                                        validator=FloatValidator())
         self._valueCombo.Bind(wx.EVT_COMBOBOX, lambda evt: self._cellValueChanged())
         self._valueCombo.Bind(wx.EVT_TEXT, lambda evt: self._cellValueChanged())
         self._valueCombo.SetSelection(0)
         self._cellValueChanged()
-        self.InsertControl(5, wx.StaticText(self, label= " %s" % _("Cell value:")))
+        self.InsertControl(5, wx.StaticText(self, label=" %s" % _("Cell value:")))
         self.InsertControl(6, self._valueCombo)
 
         self._widthValueId = wx.NewId()
@@ -101,22 +102,33 @@ class RDigitToolbar(BaseToolbar):
         self._mapSelectionCombo.SetItems(items)
 
     def OnMapSelection(self, event):
+        """!Either map to edit or create new map selected."""
         idx = self._mapSelectionCombo.GetSelection()
         if idx == 0:
-            self._controller.SelectNewMap()
+            ret = self._controller.SelectNewMap()
         else:
-            self._controller.SelectOldMap(self._mapSelectionCombo.GetString(idx))
+            ret = self._controller.SelectOldMap(self._mapSelectionCombo.GetString(idx))
+        if not ret:
+            # in wxpython 3 we can't set value which is not in the items
+            # when not editable
+            self._mapSelectionCombo.SetEditable(True)
+            self._mapSelectionCombo.SetValue(self._previousMap)
+            self._mapSelectionCombo.SetEditable(False)
+        # we need to get back to previous
+        self._previousMap = self._mapSelectionCombo.GetValue()
 
     def NewRasterAdded(self, name):
         idx = self._mapSelectionCombo.Append(name)
         self._mapSelectionCombo.SetSelection(idx)
 
-    def UpdateCellValues(self):
-        value = self._valueCombo.GetValue()
-        if str(value) not in self._cellValues:
-            self._cellValues.append(str(value))
-            self._cellValues.sort()
-            self._valueCombo.SetItems(self._cellValues)
+    def UpdateCellValues(self, values=None):
+        if not values:
+            values = [self._valueCombo.GetValue()]
+        for value in values:
+            self._cellValues.add(str(value))
+
+        valList = sorted(list(self._cellValues), key=float)
+        self._valueCombo.SetItems(valList)
 
     def _cellValueChanged(self):
         value = self._valueCombo.GetValue()

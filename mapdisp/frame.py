@@ -770,7 +770,9 @@ class MapFrame(SingleMapFrame):
                 self.toolbars['vdigit'].OnExit()
         if self.IsPaneShown('3d'):
             self.RemoveNviz()
-        
+        if hasattr(self, 'rdigit') and self.rdigit:
+            self.rdigit.Cleanup()
+
         if not self._layerManager:
             self.Destroy()
         elif self.page:
@@ -866,8 +868,13 @@ class MapFrame(SingleMapFrame):
             rastQuery = grass.raster_what(map=rast, coord=(east, north))
         if vect:
             encoding = UserSettings.Get(group='atm', key='encoding', subkey='value')
-            vectQuery = grass.vector_what(map=vect, coord=(east, north), distance=qdist,
-                                          encoding=encoding)
+            try:
+                vectQuery = grass.vector_what(map=vect, coord=(east, north), distance=qdist,
+                                              encoding=encoding)
+            except grass.ScriptError:
+                GError(parent=self, message=_("Vector querying failed"))
+                vectQuery = []
+                
         self._QueryMapDone()
         if 'Id' in vectQuery:
             self._queryHighlight(vectQuery)
@@ -1443,7 +1450,9 @@ class MapFrame(SingleMapFrame):
         self.toolbars['rdigit'] = RDigitToolbar(parent=self, controller=self.rdigit,
                                                 toolSwitcher=self._toolSwitcher)
         self.rdigit.newRasterCreated.connect(self.toolbars['rdigit'].NewRasterAdded)
+        self.rdigit.newRasterCreated.connect(lambda name: self._giface.mapCreated.emit(name=name, ltype='raster'))
         self.rdigit.newFeatureCreated.connect(self.toolbars['rdigit'].UpdateCellValues)
+        self.rdigit.uploadMapCategories.connect(self.toolbars['rdigit'].UpdateCellValues)
         rasters = self.GetMap().GetListOfLayers(ltype='raster', mapset=grass.gisenv()['MAPSET'])
         self.toolbars['rdigit'].UpdateRasterLayers(rasters)
         self.toolbars['rdigit'].SelectDefault()
@@ -1477,4 +1486,4 @@ class MapFrame(SingleMapFrame):
         self.GetMap().layerChanged.disconnect(self._updateRDigitLayers)
 
         self.RemoveToolbar('rdigit')
-
+        self.rdigit = None

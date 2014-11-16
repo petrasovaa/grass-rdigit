@@ -6,10 +6,11 @@ import uuid
 
 from grass.script import core as gcore
 from grass.script import raster as grast
-from grass.exceptions import CalledModuleError
+from grass.exceptions import CalledModuleError, ScriptError
 from grass.pydispatch.signal import Signal
 
 from core.gcmd import GError, GMessage
+from core.settings import UserSettings
 from rdigit.dialogs import NewRasterDialog
 
 
@@ -19,6 +20,8 @@ class RDigitController:
         self._mapWindow = mapWindow
 
         self._editedRaster = None
+        self._backgroundRaster = None
+        self._backupRasterName = None
         self._areas = None
         self._lines = None
         self._points = None
@@ -28,14 +31,13 @@ class RDigitController:
         self._currentCellValue = None
         self._currentWidthValue = None
         self._catCount = 1
-        self._catToCellValue = {}
-        self._catToWidthValue = {}
 
         self._oldMouseUse = None
         self._oldCursor = None
 
         self.newRasterCreated = Signal('RDigitController:newRasterCreated')
         self.newFeatureCreated = Signal('RDigitController:newFeatureCreated')
+        self.uploadMapCategories = Signal('RDigitController:uploadMapCategories')
 
     def _connectAll(self):
         self._mapWindow.mouseLeftDown.connect(self._start)
@@ -86,8 +88,8 @@ class RDigitController:
             self._finish(x, y)
         # draw
         self._mapWindow.ClearLines()
-        self._areas.Draw(pdc=self._mapWindow.pdcTmp)
         self._lines.Draw(pdc=self._mapWindow.pdcTmp)
+        self._areas.Draw(pdc=self._mapWindow.pdcTmp)
         self._mapWindow.Refresh()
 
     def _finish(self, x, y):
@@ -178,27 +180,70 @@ class RDigitController:
             self._mapWindow.SetNamedCursor(self._oldCursor)
             self._mapWindow.mouse['use'] = self._oldMouseUse
 
+        self.Cleanup()
+
     def SelectOldMap(self, name):
+        try:
+            self._backupRaster(name)
+        except ScriptError:
+            GError(parent=self._mapWindow, message=_("Failed to create backup copy of edited raster map."))
+            return False
         self._editedRaster = name
+        return True
 
     def SelectNewMap(self):
         dlg = NewRasterDialog(parent=self._mapWindow)
         if dlg.ShowModal() == wx.ID_OK:
-            self._createNewMap(mapName=dlg.GetMapName(), mapType=dlg.GetMapType())
-        dlg.Destroy()
+            try:
+                self._createNewMap(mapName=dlg.GetMapName(),
+                                   backgroundMap=dlg.GetBackgroundMapName(),
+                                   mapType=dlg.GetMapType())
+            except ScriptError:
+                GError(parent=self._mapWindow, message=_("Failed to create new raster map."))
+                return False
+            finally:
+                dlg.Destroy()
+            return True
+        else:
+            dlg.Destroy()
+            return False
 
-    def _createNewMap(self, mapName, mapType):
+    def _createNewMap(self, mapName, backgroundMap, mapType):
         name = mapName.split('@')[0]
+        background = backgroundMap.split('@')[0]
         types = {'CELL': 'int', 'FCELL': 'float', 'DCELL': 'double'}
+        if background:
+            back = background
+        else:
+            back = 'null()'
         try:
-            grast.mapcalc(exp="{name} = {mtype}(null())".format(name=name, mtype=types[mapType]),
+            grast.mapcalc(exp="{name} = {mtype}({back})".format(name=name, mtype=types[mapType],
+                                                                back=back),
                           overwrite=True, quiet=True)
+            if background:
+                self._backgroundRaster = backgroundMap
+                if mapType == 'CELL':
+                    values = gcore.read_command('r.describe', flags='1n',
+                                                map=backgroundMap, quiet=True).strip()
+                    if values:
+                        self.uploadMapCategories.emit(values=values.split('\n'))
         except CalledModuleError:
-            GError(parent=self._mapWindow, message=_("Failed to create new raster map"))
-            return
+            raise ScriptError
+        self._backupRaster(name)
+
         name = name + '@' + gcore.gisenv()['MAPSET']
         self._editedRaster = name
         self.newRasterCreated.emit(name=name)
+
+    def _backupRaster(self, name):
+        name = name.split('@')[0]
+        backup = name + '_backupcopy_' + str(os.getpid())
+        try:
+            gcore.run_command('g.copy', rast=[name, backup], quiet=True)
+        except CalledModuleError:
+            raise ScriptError
+
+        self._backupRasterName = backup
 
     def _exportRaster(self):
         if not self._editedRaster:
@@ -225,25 +270,33 @@ class RDigitController:
                                   tempRaster)
             rastersToPatch.append(out)
 
-        gcore.run_command('g.copy', rast=[self._editedRaster, tempRaster], overwrite=True, quiet=True)
-        gcore.run_command('r.patch', input=sorted(rastersToPatch, reverse=True) + [tempRaster],
+#        gcore.run_command('g.copy', rast=[self._editedRaster, tempRaster], overwrite=True, quiet=True)
+        gcore.run_command('r.patch', input=sorted(rastersToPatch, reverse=True) + [self._backupRasterName],
                           output=self._editedRaster, overwrite=True, quiet=True)
-        gcore.run_command('g.remove', type='rast', flags='f', name=rastersToPatch + [tempRaster])
+        gcore.run_command('g.remove', type='rast', flags='f', name=rastersToPatch + [tempRaster],
+                          quiet=True)
+        try:
+            if not self._backgroundRaster:
+                table = UserSettings.Get(group='rasterLayer', key='colorTable', subkey='selection')
+                gcore.run_command('r.colors', color=table, map=self._editedRaster, quiet=True)
+            else:
+                gcore.run_command('r.colors', map=self._editedRaster,
+                                  raster=self._backgroundRaster, quiet=True)
+        except CalledModuleError:
+            GError(parent=self._mapWindow,
+                   message=_("Failed to set default color table for edited raster map"))
 
     def _writeFeature(self, item, vtype, text):
         coords = item.GetCoords()
         if vtype == 'P':
             coords = [coords]
-        cat = item.GetPropertyVal('cat')
         cellValue = item.GetPropertyVal('cellValue')
-        widthValue = item.GetPropertyVal('widthValue')
-        self._catToCellValue[cat] = cellValue
-        self._catToWidthValue[cat] = widthValue
         record = '{vtype}\n'.format(vtype=vtype)
         for coord in coords:
             record += ' '.join([str(c) for c in coord])
             record += '\n'
-        record += '= {cat}\n'.format(cat=cat)
+        record += '= {cellValue}\n'.format(cellValue=cellValue)
+
         text.append(record)
 
     def _writeItem(self, item, text):
@@ -269,3 +322,9 @@ class RDigitController:
                               quiet=True)
         os.unlink(asciiFile.name)
         return output
+
+    def Cleanup(self):
+        try:
+            gcore.run_command('g.remove', type='rast', flags='f', name=self._backupRasterName, quiet=True)
+        except CalledModuleError:
+            return

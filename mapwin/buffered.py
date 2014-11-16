@@ -1179,6 +1179,9 @@ class BufferedMapWindow(MapWindowBase, wx.Window):
         :param pen: pen
         :param drawid: id of the drawn object (used by PseudoDC)
         """
+        # avid wx.GCDC assert
+        if len(coords) <= 1:
+            return None
         self.lineid = self.Draw(pdc, drawid=drawid, pdctype='polygon',
                                 coords=coords, pen=pen, brush=brush)
         return self.lineid
