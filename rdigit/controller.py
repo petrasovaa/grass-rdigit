@@ -34,6 +34,8 @@ class RDigitController(wx.EvtHandler):
         self._all = []
         self._drawing = False
         self._running = False
+        self._drawColor = wx.GREEN
+        self._drawTransparency = 100
         self._graphicsType = 'area'
         self._currentCellValue = None
         self._currentWidthValue = None
@@ -105,6 +107,7 @@ class RDigitController(wx.EvtHandler):
         self._mapWindow.ClearLines()
         self._lines.Draw(pdc=self._mapWindow.pdcTmp)
         self._areas.Draw(pdc=self._mapWindow.pdcTmp)
+        self._points.Draw(pdc=self._mapWindow.pdcTmp)
         self._mapWindow.Refresh()
 
     def _finish(self, x, y):
@@ -129,6 +132,7 @@ class RDigitController(wx.EvtHandler):
         self._catCount += 1
         self.newFeatureCreated.emit()
 
+        self._mapWindow.ClearLines()
         self._points.Draw(pdc=self._mapWindow.pdcTmp)
         self._areas.Draw(pdc=self._mapWindow.pdcTmp)
         self._lines.Draw(pdc=self._mapWindow.pdcTmp)
@@ -136,6 +140,23 @@ class RDigitController(wx.EvtHandler):
         self._mapWindow.Refresh()
 
     def SelectType(self, drawingType):
+        if self._graphicsType and not drawingType:
+            self._mapWindow.ClearLines(pdc=self._mapWindow.pdcTmp)
+            self._mapWindow.mouse['end'] = self._mapWindow.mouse['begin']
+            # disconnect mouse events
+            self._disconnectAll()
+            self._mapWindow.SetNamedCursor(self._oldCursor)
+            self._mapWindow.mouse['use'] = self._oldMouseUse
+        elif self._graphicsType is None and drawingType:
+            self._connectAll()
+            # change mouse['box'] and pen to draw line during dragging
+            # TODO: better solution for drawing this line
+            self._mapWindow.mouse['use'] = None
+            self._mapWindow.mouse['box'] = "line"
+            self._mapWindow.pen = wx.Pen(colour='red', width=2, style=wx.SHORT_DASH)
+             # change the cursor
+            self._mapWindow.SetNamedCursor('pencil')
+
         self._graphicsType = drawingType
 
     def SetCellValue(self, value):
@@ -143,6 +164,13 @@ class RDigitController(wx.EvtHandler):
 
     def SetWidthValue(self, value):
         self._currentWidthValue = value
+
+    def ChangeDrawColor(self, color):
+        self._drawColor = color[:3] + (self._drawTransparency,)
+        for each in (self._areas, self._lines, self._points):
+            each.GetPen('pen1').SetColour(self._drawColor)
+            each.GetBrush('done').SetColour(self._drawColor)
+        self._mapWindow.UpdateMap(render=False)
 
     def Start(self):
         """register graphics to map window,
@@ -158,21 +186,22 @@ class RDigitController(wx.EvtHandler):
         self._mapWindow.mouse['use'] = None
         self._mapWindow.mouse['box'] = "line"
         self._mapWindow.pen = wx.Pen(colour='red', width=2, style=wx.SHORT_DASH)
-#
+
+        color = self._drawColor[:3] + (self._drawTransparency,)
         self._areas = self._mapWindow.RegisterGraphicsToDraw(graphicsType='polygon',
                                                              mapCoords=True)
-        self._areas.AddPen('pen1', wx.Pen(colour=wx.Colour(0, 255, 0, 100), width=2, style=wx.SOLID))
-        self._areas.AddBrush('done', wx.Brush(colour=wx.Colour(0, 255, 0, 100), style=wx.SOLID))
+        self._areas.AddPen('pen1', wx.Pen(colour=color, width=2, style=wx.SOLID))
+        self._areas.AddBrush('done', wx.Brush(colour=color, style=wx.SOLID))
 
         self._lines = self._mapWindow.RegisterGraphicsToDraw(graphicsType='line',
                                                              mapCoords=True)
-        self._lines.AddPen('pen1', wx.Pen(colour=wx.Colour(0, 255, 0, 100), width=2, style=wx.SOLID))
-        self._lines.AddBrush('done', wx.Brush(colour=wx.Colour(0, 255, 0, 100), style=wx.SOLID))
+        self._lines.AddPen('pen1', wx.Pen(colour=color, width=2, style=wx.SOLID))
+        self._lines.AddBrush('done', wx.Brush(colour=color, style=wx.SOLID))
 
         self._points = self._mapWindow.RegisterGraphicsToDraw(graphicsType='point',
                                                               mapCoords=True)
-        self._points.AddPen('pen1', wx.Pen(colour=wx.Colour(0, 255, 0, 100), width=2, style=wx.SOLID))
-        self._points.AddBrush('done', wx.Brush(colour=wx.Colour(0, 255, 0, 100), style=wx.SOLID))
+        self._points.AddPen('pen1', wx.Pen(colour=color, width=2, style=wx.SOLID))
+        self._points.AddBrush('done', wx.Brush(colour=color, style=wx.SOLID))
 
         # change the cursor
         self._mapWindow.SetNamedCursor('pencil')
@@ -187,6 +216,10 @@ class RDigitController(wx.EvtHandler):
         else:
             self.quitDigitizer.emit()
 
+    def Save(self):
+        self._thread.Run(callable=self._exportRaster,
+                         ondone=lambda event: self._update())
+
     def CleanUp(self, restore=True):
         """
         :param restore: if restore previous cursor, mouse['use']
@@ -199,7 +232,8 @@ class RDigitController(wx.EvtHandler):
         self._mapWindow.ClearLines(pdc=self._mapWindow.pdcTmp)
         self._mapWindow.mouse['end'] = self._mapWindow.mouse['begin']
         # disconnect mouse events
-        self._disconnectAll()
+        if self._graphicsType:
+            self._disconnectAll()
         # unregister
         self._mapWindow.UnregisterGraphicsToDraw(self._areas)
         self._mapWindow.UnregisterGraphicsToDraw(self._lines)
