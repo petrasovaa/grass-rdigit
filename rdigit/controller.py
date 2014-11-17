@@ -3,6 +3,7 @@ import os
 import tempfile
 import wx
 import uuid
+from wx.lib.newevent import NewEvent
 
 from grass.script import core as gcore
 from grass.script import raster as grast
@@ -11,14 +12,19 @@ from grass.pydispatch.signal import Signal
 
 from core.gcmd import GError, GMessage
 from core.settings import UserSettings
+from core.gthread import gThread
 from rdigit.dialogs import NewRasterDialog
 
+updateProgress, EVT_UPDATE_PROGRESS = NewEvent()
 
-class RDigitController:
+
+class RDigitController(wx.EvtHandler):
     def __init__(self, giface, mapWindow):
+        wx.EvtHandler.__init__(self)
         self._giface = giface
         self._mapWindow = mapWindow
 
+        self._thread = gThread()
         self._editedRaster = None
         self._backgroundRaster = None
         self._backupRasterName = None
@@ -27,6 +33,7 @@ class RDigitController:
         self._points = None
         self._all = []
         self._drawing = False
+        self._running = False
         self._graphicsType = 'area'
         self._currentCellValue = None
         self._currentWidthValue = None
@@ -38,6 +45,8 @@ class RDigitController:
         self.newRasterCreated = Signal('RDigitController:newRasterCreated')
         self.newFeatureCreated = Signal('RDigitController:newFeatureCreated')
         self.uploadMapCategories = Signal('RDigitController:uploadMapCategories')
+        self.quitDigitizer = Signal('RDigitController:quitDigitizer')
+        self.updateProgress = Signal('RDigitController:reportProgress')
 
     def _connectAll(self):
         self._mapWindow.mouseLeftDown.connect(self._start)
@@ -52,6 +61,9 @@ class RDigitController:
         self._mapWindow.Bind(wx.EVT_CONTEXT_MENU, self._mapWindow.OnContextMenu)
 
     def _start(self, x, y):
+        if self._running:
+            return
+
         if not self._editedRaster:
             GMessage(parent=self._mapWindow, message=_("Please select first the raster map"))
             return
@@ -71,6 +83,9 @@ class RDigitController:
             self._drawing = True
 
     def _addPoint(self, x, y):
+        if self._running:
+            return
+
         if not self._drawing:
             return
 
@@ -93,6 +108,9 @@ class RDigitController:
         self._mapWindow.Refresh()
 
     def _finish(self, x, y):
+        if self._running:
+            return
+
         if self._graphicsType == 'point':
             item = self._points.GetItem(-1)
         elif self._graphicsType == 'area':
@@ -159,11 +177,25 @@ class RDigitController:
         # change the cursor
         self._mapWindow.SetNamedCursor('pencil')
 
-    def Stop(self, restore=True):
+    def Stop(self):
+        dlg = wx.MessageDialog(self._mapWindow, _("Do you want to save edits?"),
+                               _("Save raster map edits"), wx.YES_NO)
+        if dlg.ShowModal() == wx.ID_YES:
+            self._running = True
+            self._thread.Run(callable=self._exportRaster,
+                             ondone=lambda event: self._updateAndQuit())
+        else:
+            self.quitDigitizer.emit()
+
+    def CleanUp(self, restore=True):
         """
         :param restore: if restore previous cursor, mouse['use']
         """
-        self._exportRaster()
+        try:
+            gcore.run_command('g.remove', type='rast', flags='f', name=self._backupRasterName, quiet=True)
+        except CalledModuleError:
+            pass
+
         self._mapWindow.ClearLines(pdc=self._mapWindow.pdcTmp)
         self._mapWindow.mouse['end'] = self._mapWindow.mouse['begin']
         # disconnect mouse events
@@ -180,7 +212,14 @@ class RDigitController:
             self._mapWindow.SetNamedCursor(self._oldCursor)
             self._mapWindow.mouse['use'] = self._oldMouseUse
 
-        self.Cleanup()
+    def _updateAndQuit(self):
+        self._running = False
+        self._mapWindow.UpdateMap(render=True)
+        self.quitDigitizer.emit()
+
+    def _update(self):
+        self._running = False
+        self._mapWindow.UpdateMap(render=True)
 
     def SelectOldMap(self, name):
         try:
@@ -249,13 +288,23 @@ class RDigitController:
         if not self._editedRaster:
             return
 
+        if len(self._all) < 1:
+            return
         tempRaster = 'tmp_rdigit_rast_' + str(os.getpid())
         text = []
         rastersToPatch = []
+        i = 0
+        lastCellValue = lastWidthValue = None
+        evt = updateProgress(range=len(self._all), value=0, text=_("Rasterizing..."))
+        wx.PostEvent(self, evt)
+        lastCellValue = self._all[0].GetPropertyVal('cellValue')
+        lastWidthValue = self._all[0].GetPropertyVal('widthValue')
         for item in self._all:
-            if item.GetPropertyVal('widthValue'):
+            if item.GetPropertyVal('widthValue') and \
+                (lastCellValue != item.GetPropertyVal('cellValue') or
+                lastWidthValue != item.GetPropertyVal('widthValue')):
                 if text:
-                    out = self._rasterize(text, item.GetPropertyVal('widthValue'), tempRaster)
+                    out = self._rasterize(text, lastWidthValue, tempRaster)
                     rastersToPatch.append(out)
                     text = []
                 self._writeItem(item, text)
@@ -265,12 +314,17 @@ class RDigitController:
                 text = []
             else:
                 self._writeItem(item, text)
+            lastCellValue = item.GetPropertyVal('cellValue')
+            lastWidthValue = item.GetPropertyVal('widthValue')
+
+            i += 1
+            evt = updateProgress(range=len(self._all), value=i, text=_("Rasterizing..."))
+            wx.PostEvent(self, evt)
         if text:
             out = self._rasterize(text, item.GetPropertyVal('widthValue'),
                                   tempRaster)
             rastersToPatch.append(out)
 
-#        gcore.run_command('g.copy', rast=[self._editedRaster, tempRaster], overwrite=True, quiet=True)
         gcore.run_command('r.patch', input=sorted(rastersToPatch, reverse=True) + [self._backupRasterName],
                           output=self._editedRaster, overwrite=True, quiet=True)
         gcore.run_command('g.remove', type='rast', flags='f', name=rastersToPatch + [tempRaster],
@@ -322,9 +376,3 @@ class RDigitController:
                               quiet=True)
         os.unlink(asciiFile.name)
         return output
-
-    def Cleanup(self):
-        try:
-            gcore.run_command('g.remove', type='rast', flags='f', name=self._backupRasterName, quiet=True)
-        except CalledModuleError:
-            return

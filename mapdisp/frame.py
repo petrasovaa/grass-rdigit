@@ -771,7 +771,7 @@ class MapFrame(SingleMapFrame):
         if self.IsPaneShown('3d'):
             self.RemoveNviz()
         if hasattr(self, 'rdigit') and self.rdigit:
-            self.rdigit.Cleanup()
+            self.rdigit.CleanUp()
 
         if not self._layerManager:
             self.Destroy()
@@ -1442,7 +1442,7 @@ class MapFrame(SingleMapFrame):
         self.MapWindow = map_win
 
     def AddRDigit(self):
-        from rdigit.controller import RDigitController
+        from rdigit.controller import RDigitController, EVT_UPDATE_PROGRESS
         from rdigit.toolbars import RDigitToolbar
 
         self.rdigit = RDigitController(self._giface,
@@ -1453,6 +1453,10 @@ class MapFrame(SingleMapFrame):
         self.rdigit.newRasterCreated.connect(lambda name: self._giface.mapCreated.emit(name=name, ltype='raster'))
         self.rdigit.newFeatureCreated.connect(self.toolbars['rdigit'].UpdateCellValues)
         self.rdigit.uploadMapCategories.connect(self.toolbars['rdigit'].UpdateCellValues)
+        self.rdigit.quitDigitizer.connect(self.QuitRDigit)
+        self.rdigit.Bind(EVT_UPDATE_PROGRESS,
+                         lambda evt: self.statusbarManager.SetProgress(evt.range, evt.value, evt.text))
+#        self.rdigit.updateProgress.connect(self.statusbarManager.SetProgress)
         rasters = self.GetMap().GetListOfLayers(ltype='raster', mapset=grass.gisenv()['MAPSET'])
         self.toolbars['rdigit'].UpdateRasterLayers(rasters)
         self.toolbars['rdigit'].SelectDefault()
@@ -1479,7 +1483,7 @@ class MapFrame(SingleMapFrame):
 
     def QuitRDigit(self):
 
-        self.rdigit.Stop()
+        self.rdigit.CleanUp()
         # disconnect updating layers
         self.GetMap().layerAdded.disconnect(self._updateRDigitLayers)
         self.GetMap().layerRemoved.disconnect(self._updateRDigitLayers)

@@ -93,7 +93,7 @@ class RDigitToolbar(BaseToolbar):
                                      (None, ),
                                      (None, ),
                                      ('quit', rdigitIcons['quit'],
-                                      lambda event: self.parent.QuitRDigit())))
+                                      lambda event: self._controller.Stop())))
 
     def UpdateRasterLayers(self, rasters):
         new = _("New raster map")
