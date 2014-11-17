@@ -99,7 +99,7 @@ class MapToolbar(BaseToolbar):
             self.toolId['3d'] = -1
 
         if haveVDigit:
-            choices.append(_('Digitize'))
+            choices.append(_("Vector digitizer"))
             self.toolId['vdigit'] = toolNum
             toolNum += 1
         else:
@@ -113,7 +113,7 @@ class MapToolbar(BaseToolbar):
                              'In the meantime you can use "v.digit" from the Develop Vector menu.'), wrap = 60)
             
             self.toolId['vdigit'] = -1
-        choices.append(_('Digitize raster'))
+        choices.append(_("Raster digitizer"))
         self.toolId['rdigit'] = toolNum
 
         self.combo = wx.ComboBox(parent = self, id = wx.ID_ANY,

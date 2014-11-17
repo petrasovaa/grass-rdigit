@@ -476,7 +476,7 @@ class MapFrame(SingleMapFrame):
             
         # vector digitizer
         elif name == "vdigit":
-            self.toolbars['map'].combo.SetValue(_("Digitize"))
+            self.toolbars['map'].combo.SetValue(_("Vector digitizer"))
             self._addToolbarVDigit()
         
         if fixed:
@@ -1453,6 +1453,7 @@ class MapFrame(SingleMapFrame):
         self.rdigit.newRasterCreated.connect(lambda name: self._giface.mapCreated.emit(name=name, ltype='raster'))
         self.rdigit.newFeatureCreated.connect(self.toolbars['rdigit'].UpdateCellValues)
         self.rdigit.uploadMapCategories.connect(self.toolbars['rdigit'].UpdateCellValues)
+        self.rdigit.showNotification.connect(lambda text: self.SetStatusText(text, 0))
         self.rdigit.quitDigitizer.connect(self.QuitRDigit)
         self.rdigit.Bind(EVT_UPDATE_PROGRESS,
                          lambda evt: self.statusbarManager.SetProgress(evt.range, evt.value, evt.text))

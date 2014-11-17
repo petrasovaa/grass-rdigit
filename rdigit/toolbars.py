@@ -30,14 +30,15 @@ rdigitIcons = {'area': MetaIcon(img='polygon-create',
                'point': MetaIcon(img='point-create',
                                  label=_('Digitize point')),
                'save': MetaIcon(img='save', label=_("Save raster map")),
+               'undo': MetaIcon(img='undo', label=_("Undo")),
                'quit': MetaIcon(img='quit', label=_("Quit raster digitizer"))}
 
 
 class RDigitToolbar(BaseToolbar):
-    """IClass Map toolbar
+    """RDigit toolbar
     """
     def __init__(self, parent, controller, toolSwitcher):
-        """IClass Map toolbar constructor
+        """RDigit toolbar constructor
         """
         BaseToolbar.__init__(self, parent, toolSwitcher)
         self._controller = controller
@@ -102,13 +103,15 @@ class RDigitToolbar(BaseToolbar):
                                       wx.ITEM_CHECK),
                                      (None, ),
                                      (None, ),
+                                     ('undo', rdigitIcons['undo'],
+                                      lambda event: self._controller.Undo()),
                                      ('save', rdigitIcons['save'],
                                       lambda event: self._controller.Save()),
                                      ('quit', rdigitIcons['quit'],
                                       lambda event: self._controller.Stop())))
 
     def CheckSelectedTool(self, id):
-        if id not in (self.area, self.line, self.point):
+        if self.toolSwitcher.IsToolInGroup(tool=id, group='mouseUse') and id not in (self.area, self.line, self.point):
             self._controller.SelectType(None)
 
     def UpdateRasterLayers(self, rasters):

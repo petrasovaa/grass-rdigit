@@ -39,7 +39,6 @@ class RDigitController(wx.EvtHandler):
         self._graphicsType = 'area'
         self._currentCellValue = None
         self._currentWidthValue = None
-        self._catCount = 1
 
         self._oldMouseUse = None
         self._oldCursor = None
@@ -48,7 +47,7 @@ class RDigitController(wx.EvtHandler):
         self.newFeatureCreated = Signal('RDigitController:newFeatureCreated')
         self.uploadMapCategories = Signal('RDigitController:uploadMapCategories')
         self.quitDigitizer = Signal('RDigitController:quitDigitizer')
-        self.updateProgress = Signal('RDigitController:reportProgress')
+        self.showNotification = Signal('RDigitController:showNotification')
 
     def _connectAll(self):
         self._mapWindow.mouseLeftDown.connect(self._start)
@@ -95,10 +94,12 @@ class RDigitController(wx.EvtHandler):
             area = self._areas.GetItem(-1)
             coords = area.GetCoords() + [[x, y]]
             area.SetCoords(coords)
+            self.showNotification.emit(text=_("Right click to finish area"))
         elif self._graphicsType == 'line':
             line = self._lines.GetItem(-1)
             coords = line.GetCoords() + [[x, y]]
             line.SetCoords(coords)
+            self.showNotification.emit(text=_("Right click to finish line"))
         elif self._graphicsType == 'point':
             point = self._points.GetItem(-1)
             point.SetCoords([x, y])
@@ -123,13 +124,10 @@ class RDigitController(wx.EvtHandler):
 
         self._drawing = False
         item.SetPropertyVal('brushName', 'done')
-        item.AddProperty('cat')
         item.AddProperty('cellValue')
         item.AddProperty('widthValue')
         item.SetPropertyVal('cellValue', self._currentCellValue)
-        item.SetPropertyVal('cat', self._catCount)
         item.SetPropertyVal('widthValue', self._currentWidthValue)
-        self._catCount += 1
         self.newFeatureCreated.emit()
 
         self._mapWindow.ClearLines()
@@ -219,6 +217,16 @@ class RDigitController(wx.EvtHandler):
     def Save(self):
         self._thread.Run(callable=self._exportRaster,
                          ondone=lambda event: self._update())
+
+    def Undo(self):
+        if len(self._all):
+            removed = self._all.pop(-1)
+            # try to remove from each, it fails quietly when theitem is not there
+            self._areas.DeleteItem(removed)
+            self._lines.DeleteItem(removed)
+            self._points.DeleteItem(removed)
+            self._drawing = False
+            self._mapWindow.UpdateMap(render=False)
 
     def CleanUp(self, restore=True):
         """
